@@ -91,14 +91,12 @@ class AsyncExecutor:
         inputs: Sequence[Any],
         queue: asyncio.Queue[Union[EndOfQueue, Tuple[int, Any]]],
     ) -> None:
-        for index, input in enumerate(inputs):
-            if self._TERMINATE:
-                break
-            await queue.put((index, input))
-        # adds an end of queue sentinel for each consumer, guaranteeing that any consumer that is
-        # currently waiting for an item will gracefully stop.
-        for _ in range(self.concurrency):
-            await queue.put(self.end_of_queue)
+        try:
+            async with queue:
+                for index, input in enumerate(inputs):
+                    await queue.send((index, input))
+        except (anyio.EndOfStream, anyio.ClosedResourceError, anyio.BrokenResourceError):
+                return
 
     async def consumer(
         self,
@@ -106,42 +104,40 @@ class AsyncExecutor:
         queue: asyncio.Queue[Union[EndOfQueue, Tuple[int, Any]]],
         progress_bar: tqdm[Any],
     ) -> None:
-        while True:
-            item = await queue.get()
-            if item is self.end_of_queue:
-                return
-            elif self._TERMINATE:
-                # discard any remaining items in the queue
-                continue
-
-            item = cast(Tuple[int, Any], item)
-            index, payload = item
+        async with queue:
             try:
-                result = await self.generate(payload)
-                output[index] = result
-                progress_bar.update()
-            except Exception as e:
-                tqdm.write(f"Exception in consumer: {e}")
-                if self.exit_on_error:
-                    self._TERMINATE = True
-                else:
-                    progress_bar.update()
+                async for item in queue:
+                    if self._TERMINATE:
+                        return
+
+                    item = cast(Tuple[int, Any], item)
+                    index, payload = item
+                    try:
+                        result = await self.generate(payload)
+                        output[index] = result
+                        progress_bar.update()
+                    except Exception as e:
+                        tqdm.write(f"Exception in consumer: {e}")
+                        if self.exit_on_error:
+                            self._TERMINATE = True
+                        else:
+                            progress_bar.update()
+            except (anyio.EndOfStream, anyio.ClosedResourceError, anyio.BrokenResourceError):
+                return
 
     async def execute(self, inputs: Sequence[Any]) -> List[Any]:
         outputs = [self.fallback_return_value] * len(inputs)
         progress_bar = tqdm(total=len(inputs), bar_format=self.tqdm_bar_format)
 
-        queue: asyncio.Queue[Union[EndOfQueue, Tuple[int, Any]]] = asyncio.Queue(
-            maxsize=2 * self.concurrency
+        send_stream, receive_stream = anyio.create_memory_object_stream(
+            max_buffer_size=2 * self.concurrency
         )
 
-        producer = self.producer(inputs, queue)
-        consumers = [
-            asyncio.create_task(self.consumer(outputs, queue, progress_bar))
-            for _ in range(self.concurrency)
-        ]
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(self.producer, inputs, send_stream)
+            for _ in range(self.concurrency):
+                task_group.start_soon(self.consumer, outputs, receive_stream, progress_bar)
 
-        await asyncio.gather(producer, *consumers)
         return outputs
 
     def run(self, inputs: Sequence[Any]) -> List[Any]:
