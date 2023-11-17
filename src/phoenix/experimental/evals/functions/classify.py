@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import signal
+from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
     Callable,
@@ -18,7 +19,6 @@ from typing import (
     cast,
 )
 
-import nest_asyncio
 import pandas as pd
 from tqdm.auto import tqdm
 
@@ -147,13 +147,9 @@ class AsyncExecutor:
         return outputs
 
     def run(self, inputs: Sequence[Any]) -> List[Any]:
-        try:
-            asyncio.get_running_loop()
-            if self.use_nest_asyncio:
-                nest_asyncio.apply()
-        except RuntimeError:
-            pass
-        return asyncio.run(self.execute(inputs))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, self.execute(inputs))  # type: ignore
+            return cast(List[Any], future.result())
 
 
 def llm_classify(
@@ -199,7 +195,7 @@ def llm_classify(
         provide_explanation (bool, default=False): If True, provides an explanation for each
         classification label. A column named `explanation` is added to the output dataframe.
         Currently, this is only available for models with function calling.
-        
+
         concurrency (int, defualt=3): The number of concurrent evals.
 
     Returns:
