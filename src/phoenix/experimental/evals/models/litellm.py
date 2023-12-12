@@ -20,16 +20,17 @@ class LiteLLMModel(BaseEvalModel):
     """The maximum number of tokens to generate in the completion."""
     top_p: float = 1
     """Total probability mass of tokens to consider at each step."""
-    max_retries: int = 6
-    """Maximum number to retry a model if an RateLimitError, OpenAIError, or
-    ServiceUnavailableError occurs."""
     request_timeout: int = 60
     """Maximum number of seconds to wait when retrying."""
     model_kwargs: Dict[str, Any] = field(default_factory=dict)
     """Model specific params"""
 
     # non-LiteLLM params
+    max_retries: int = 6
+    """Maximum number to retry a model"""
     retry_min_seconds: int = 10
+    """Minimum number of seconds to wait when retrying."""
+    retry_max_seconds: int = 60
     """Minimum number of seconds to wait when retrying."""
     max_content_size: Optional[int] = None
     """If you're using a fine-tuned model, set this to the maximum content size"""
