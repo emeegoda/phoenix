@@ -20,7 +20,7 @@ class LiteLLMModel(BaseEvalModel):
     """The maximum number of tokens to generate in the completion."""
     top_p: float = 1
     """Total probability mass of tokens to consider at each step."""
-    num_retries: int = 6
+    max_retries: int = 6
     """Maximum number to retry a model if an RateLimitError, OpenAIError, or
     ServiceUnavailableError occurs."""
     request_timeout: int = 60
@@ -37,6 +37,12 @@ class LiteLLMModel(BaseEvalModel):
     def __post_init__(self) -> None:
         self._init_environment()
         self._init_model_encoding()
+        self.retry = self._retry(
+            error_types=[],  # default to catching all errors
+            min_seconds=self.retry_min_seconds,
+            max_seconds=self.retry_max_seconds,
+            max_retries=self.max_retries,
+        )
 
     def _init_environment(self) -> None:
         try:
@@ -107,16 +113,15 @@ class LiteLLMModel(BaseEvalModel):
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 top_p=self.top_p,
-                num_retries=self.num_retries,
                 request_timeout=self.request_timeout,
                 **self.model_kwargs,
             )
         )
 
     def _generate_with_retry(self, **kwargs: Any) -> Any:
-        # Using default LiteLLM completion with retries = self.num_retries.
+        # Using default LiteLLM completion
 
-        response = self._litellm.completion(**kwargs)
+        response = self.retry(self._litellm.completion(**kwargs))
         return response.choices[0].message.content
 
     def _get_messages_from_prompt(self, prompt: str) -> List[Dict[str, str]]:
