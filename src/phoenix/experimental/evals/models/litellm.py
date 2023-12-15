@@ -109,8 +109,23 @@ class LiteLLMModel(BaseEvalModel):
     async def _async_generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
         async_limiter = self._rate_limiter.alimit
         messages = self._get_messages_from_prompt(prompt)
-        res = await async_limiter(
-            self._async_generate_with_retry(
+        res = await async_limiter(self._async_generate_with_retry)(
+            model=self.model_name,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            top_p=self.top_p,
+            num_retries=self.num_retries,
+            request_timeout=self.request_timeout,
+            **self.model_kwargs,
+        )
+        return str(res)
+
+    def _generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
+        limiter = self._rate_limiter.limit
+        messages = self._get_messages_from_prompt(prompt)
+        return str(
+            limiter(self._generate_with_retry)(
                 model=self.model_name,
                 messages=messages,
                 temperature=self.temperature,
@@ -119,25 +134,6 @@ class LiteLLMModel(BaseEvalModel):
                 num_retries=self.num_retries,
                 request_timeout=self.request_timeout,
                 **self.model_kwargs,
-            )
-        )
-        return str(res)
-
-    def _generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
-        limiter = self._rate_limiter.limit
-        messages = self._get_messages_from_prompt(prompt)
-        return str(
-            limiter(
-                self._generate_with_retry(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    top_p=self.top_p,
-                    num_retries=self.num_retries,
-                    request_timeout=self.request_timeout,
-                    **self.model_kwargs,
-                )
             )
         )
 
