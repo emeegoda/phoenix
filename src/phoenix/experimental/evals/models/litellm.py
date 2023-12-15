@@ -96,7 +96,18 @@ class LiteLLMModel(BaseEvalModel):
         return str(self._decoding(model=self.model_name, tokens=tokens))
 
     async def _async_generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
-        return self._generate(prompt, **kwargs)
+        messages = self._get_messages_from_prompt(prompt)
+        res = await self._async_generate_with_retry(
+            model=self.model_name,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            top_p=self.top_p,
+            num_retries=self.num_retries,
+            request_timeout=self.request_timeout,
+            **self.model_kwargs,
+        )
+        return str(res)
 
     def _generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
         messages = self._get_messages_from_prompt(prompt)
@@ -112,6 +123,12 @@ class LiteLLMModel(BaseEvalModel):
                 **self.model_kwargs,
             )
         )
+
+    async def _async_generate_with_retry(self, **kwargs: Any) -> Any:
+        # Using default LiteLLM completion with retries = self.num_retries.
+
+        response = await self._litellm.acompletion(**kwargs)
+        return response.choices[0].message.content
 
     def _generate_with_retry(self, **kwargs: Any) -> Any:
         # Using default LiteLLM completion with retries = self.num_retries.
