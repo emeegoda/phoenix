@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from phoenix.experimental.evals.models.base import BaseEvalModel
+from phoenix.experimental.evals.models.rate_limiters import RateLimiter
 
 if TYPE_CHECKING:
     from tiktoken import Encoding
@@ -37,6 +38,7 @@ class LiteLLMModel(BaseEvalModel):
     def __post_init__(self) -> None:
         self._init_environment()
         self._init_model_encoding()
+        self._init_rate_limiter()
 
     def _init_environment(self) -> None:
         try:
@@ -70,6 +72,15 @@ class LiteLLMModel(BaseEvalModel):
                 f"Model name not found in the LiteLLM's models list: \n{self._litellm.model_list}"
             )
 
+    def _init_rate_limiter(self) -> None:
+        self._rate_limiter = RateLimiter(
+            rate_limit_error=self._litellm.RateLimitError,
+            max_rate_limit_retries=10,
+            initial_per_second_request_rate=5,
+            maximum_per_second_request_rate=20,
+            enforcement_window_minutes=1,
+        )
+
     @property
     def max_context_size(self) -> int:
         context_size = self.max_content_size or self._litellm.get_max_tokens(self.model_name).get(
@@ -96,23 +107,10 @@ class LiteLLMModel(BaseEvalModel):
         return str(self._decoding(model=self.model_name, tokens=tokens))
 
     async def _async_generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
+        async_limiter = self._rate_limiter.alimit
         messages = self._get_messages_from_prompt(prompt)
-        res = await self._async_generate_with_retry(
-            model=self.model_name,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            top_p=self.top_p,
-            num_retries=self.num_retries,
-            request_timeout=self.request_timeout,
-            **self.model_kwargs,
-        )
-        return str(res)
-
-    def _generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
-        messages = self._get_messages_from_prompt(prompt)
-        return str(
-            self._generate_with_retry(
+        res = await async_limiter(
+            self._async_generate_with_retry(
                 model=self.model_name,
                 messages=messages,
                 temperature=self.temperature,
@@ -121,6 +119,25 @@ class LiteLLMModel(BaseEvalModel):
                 num_retries=self.num_retries,
                 request_timeout=self.request_timeout,
                 **self.model_kwargs,
+            )
+        )
+        return str(res)
+
+    def _generate(self, prompt: str, **kwargs: Dict[str, Any]) -> str:
+        limiter = self._rate_limiter.limit
+        messages = self._get_messages_from_prompt(prompt)
+        return str(
+            limiter(
+                self._generate_with_retry(
+                    model=self.model_name,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    top_p=self.top_p,
+                    num_retries=self.num_retries,
+                    request_timeout=self.request_timeout,
+                    **self.model_kwargs,
+                )
             )
         )
 
